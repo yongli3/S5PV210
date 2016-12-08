@@ -1,0 +1,444 @@
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+old mode 100644
+new mode 100755
+index fc6d541..b5a7f61
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -8,6 +8,9 @@
+  * it under the terms of the GNU General Public License version 2 as
+  * published by the Free Software Foundation.
+  */
++
++#define DEBUG
++
+ #include <linux/linkage.h>
+ #include <asm/assembler.h>
+ #include <asm/v7m.h>
+@@ -212,7 +215,9 @@ not_angel:
+ 		 * Given that r4 > &_end is most unfrequent, we add a rough
+ 		 * additional 1MB of room for a possible appended DTB.
+ 		 */
++		/*r4 = 0x30008000 pc = 0x300080b4*/
+ 		mov	r0, pc
++		
+ 		cmp	r0, r4
+ 		ldrcc	r0, LC0+32
+ 		addcc	r0, r0, pc
+@@ -611,7 +616,6 @@ params:		ldr	r0, =0x10000100		@ params_phys for RPC
+ 		.align	5
+ cache_on:	mov	r3, #8			@ cache_on function
+ 		b	call_cache_fn
+-
+ /*
+  * Initialize the highest priority protection region, PR7
+  * to cover all 32bit address and cacheable and bufferable.
+@@ -766,6 +770,16 @@ __armv7_mmu_cache_on:
+ 		tst	r11, #0xf		@ VMSA
+ 		mcrne	p15, 0, r0, c8, c7, 0	@ flush I,D TLBs
+ #endif
++		/* FIXME boot fail without the below ????
++  		 *  corrupts {r0, r1, r2, r3} 
++		 */
++#if 1		 
++		mov r11, r3
++		kputc 	#'x'
++		mov r3, r11
++#else
++#endif		
++		/*c -> r0 */
+ 		mrc	p15, 0, r0, c1, c0, 0	@ read control reg
+ 		bic	r0, r0, #1 << 28	@ clear SCTLR.TRE
+ 		orr	r0, r0, #0x5000		@ I-cache enable, RR cache replacement
+diff --git a/arch/arm/boot/dts/s5pv210-smdkv210.dts b/arch/arm/boot/dts/s5pv210-smdkv210.dts
+old mode 100644
+new mode 100755
+index 7539831..2a5a9a4
+--- a/arch/arm/boot/dts/s5pv210-smdkv210.dts
++++ b/arch/arm/boot/dts/s5pv210-smdkv210.dts
+@@ -19,6 +19,7 @@
+ 
+ /dts-v1/;
+ #include <dt-bindings/input/input.h>
++#include <dt-bindings/interrupt-controller/irq.h>
+ #include "s5pv210.dtsi"
+ 
+ / {
+@@ -36,9 +37,9 @@
+ 
+ 	ethernet@18000000 {
+ 		compatible = "davicom,dm9000";
+-		reg = <0xA8000000 0x2 0xA8000002 0x2>;
++		reg = <0x88000000 0x2 0x88000004 0x2>;
+ 		interrupt-parent = <&gph1>;
+-		interrupts = <1 4>;
++		interrupts = <2 IRQ_TYPE_EDGE_RISING>;
+ 		local-mac-address = [00 00 de ad be ef];
+ 		davicom,no-eeprom;
+ 	};
+diff --git a/arch/arm/include/asm/memory.h b/arch/arm/include/asm/memory.h
+old mode 100644
+new mode 100755
+index 76cbd9c..3d6f300
+--- a/arch/arm/include/asm/memory.h
++++ b/arch/arm/include/asm/memory.h
+@@ -234,7 +234,7 @@ static inline unsigned long __phys_to_virt(phys_addr_t x)
+ }
+ 
+ #else
+-
++not used
+ #define PHYS_OFFSET	PLAT_PHYS_OFFSET
+ #define PHYS_PFN_OFFSET	((unsigned long)(PHYS_OFFSET >> PAGE_SHIFT))
+ 
+diff --git a/arch/arm/kernel/atags_parse.c b/arch/arm/kernel/atags_parse.c
+old mode 100644
+new mode 100755
+index 68c6ae0..6d5d32e
+--- a/arch/arm/kernel/atags_parse.c
++++ b/arch/arm/kernel/atags_parse.c
+@@ -150,11 +150,13 @@ static int __init parse_tag(const struct tag *tag)
+ 	extern struct tagtable __tagtable_begin, __tagtable_end;
+ 	struct tagtable *t;
+ 
+-	for (t = &__tagtable_begin; t < &__tagtable_end; t++)
++	for (t = &__tagtable_begin; t < &__tagtable_end; t++) {
++        printk("**%s %x-%x %x\n", __func__, t->tag, tag->hdr.tag, tag->hdr.size);
+ 		if (tag->hdr.tag == t->tag) {
+ 			t->parse(tag);
+ 			break;
+ 		}
++   }
+ 
+ 	return t < &__tagtable_end;
+ }
+@@ -185,6 +187,8 @@ setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
+ 	const struct machine_desc *mdesc = NULL, *p;
+ 	char *from = default_command_line;
+ 
++    printk("**%s %x-%x %s-%x tags=%x\n", __func__, __atags_pointer, machine_nr, from, PHYS_OFFSET, tags);
++
+ 	default_tags.mem.start = PHYS_OFFSET;
+ 
+ 	/*
+@@ -208,6 +212,8 @@ setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
+ 	else if (mdesc->atag_offset)
+ 		tags = (void *)(PAGE_OFFSET + mdesc->atag_offset);
+ 
++    printk("**%s tags=%x mdesc=%x %x\n", __func__, tags, mdesc, mdesc->atag_offset);
++    
+ #if defined(CONFIG_DEPRECATED_PARAM_STRUCT)
+ 	/*
+ 	 * If we have the old style parameters, convert them to
+diff --git a/arch/arm/kernel/setup.c b/arch/arm/kernel/setup.c
+old mode 100644
+new mode 100755
+index 34e3f3c..54dbe14
+--- a/arch/arm/kernel/setup.c
++++ b/arch/arm/kernel/setup.c
+@@ -1140,6 +1140,8 @@ void __init setup_arch(char **cmdline_p)
+ 
+ 	if (mdesc->init_early)
+ 		mdesc->init_early();
++
++    printk("**%s PHYS_OFFSET=%x\n", __func__, PHYS_OFFSET);
+ }
+ 
+ 
+diff --git a/arch/arm/mach-s5pv210/s5pv210.c b/arch/arm/mach-s5pv210/s5pv210.c
+old mode 100644
+new mode 100755
+index 83e656e..a5f1ad6
+--- a/arch/arm/mach-s5pv210/s5pv210.c
++++ b/arch/arm/mach-s5pv210/s5pv210.c
+@@ -19,9 +19,28 @@
+ 
+ #include <plat/map-base.h>
+ 
++#include <plat/map-s5p.h>
++#include <plat/cpu.h>
++
+ #include "common.h"
+ #include "regs-clock.h"
+ 
++
++static struct map_desc s5pv210_iodesc[] __initdata = {
++	{
++		.virtual	= (unsigned long)S5P_VA_CHIPID,
++		.pfn		= __phys_to_pfn(S5P_PA_CHIPID),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},
++    {
++		.virtual	= (unsigned long)S5P_VA_SROMC,
++		.pfn		= __phys_to_pfn(S5P_PA_SROMC),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},	
++};
++
+ static int __init s5pv210_fdt_map_sys(unsigned long node, const char *uname,
+ 					int depth, void *data)
+ {
+@@ -41,15 +60,41 @@ static int __init s5pv210_fdt_map_sys(unsigned long node, const char *uname,
+ 	iodesc.virtual = (unsigned long)S3C_VA_SYS;
+ 	iodesc.type = MT_DEVICE;
+ 	iotable_init(&iodesc, 1);
+-
+ 	return 1;
+ }
+ 
++static void __init s5pv210_map_io(void)
++{
++	iotable_init(s5pv210_iodesc, ARRAY_SIZE(s5pv210_iodesc));
++}
++
++static void __init s5pv210_dm9000_init(void) 
++{ 
++	unsigned int tmp; 
++	tmp = __raw_readl(S5P_SROM_BW);
++    printk("**%s read %x\n", __func__, tmp);
++	tmp &= ~(0xf << 4); 
++	tmp |= (1<<7) | (1<<6) | (1<<5) | (1<<4); // dm9000 16bit 
++    printk("**%s write %x\n", __func__, tmp);
++    __raw_writel(tmp, S5P_SROM_BW); 
++    __raw_writel((0x0<<28)|(0x0<<24)|(0x5<<16)|(0x0<<12)|(0x0<<8)|(0x0<<4)|(0x0<<0), S5P_SROM_BC1); 
++
++#if 0
++    tmp = __raw_readl(S5PV210_MP01CON); 
++	tmp |= (2 << 4); 
++	__raw_writel(tmp, S5PV210_MP01CON);
++#endif    
++}
++
+ static void __init s5pv210_dt_map_io(void)
+ {
++    printk("**%s\n", __func__);
+ 	debug_ll_io_init();
+-
+ 	of_scan_flat_dt(s5pv210_fdt_map_sys, NULL);
++    
++    s5pv210_map_io();
++    s5p_init_cpu(S5P_VA_CHIPID);
++    s5pv210_dm9000_init();
+ }
+ 
+ static void s5pv210_dt_restart(enum reboot_mode mode, const char *cmd)
+diff --git a/arch/arm/plat-samsung/include/plat/map-s5p.h b/arch/arm/plat-samsung/include/plat/map-s5p.h
+old mode 100644
+new mode 100755
+index 0fe2828..748326e
+--- a/arch/arm/plat-samsung/include/plat/map-s5p.h
++++ b/arch/arm/plat-samsung/include/plat/map-s5p.h
+@@ -14,6 +14,19 @@
+ #define __ASM_PLAT_MAP_S5P_H __FILE__
+ 
+ #define S5P_VA_CHIPID		S3C_ADDR(0x02000000)
++#define S5P_PA_CHIPID		(0xe0000000)
++
++#define S5P_VA_SROMC		S3C_ADDR(0x017C0000)
++#define S5P_PA_SROMC		(0xE8000000)
++
++#define S5P_SROMREG(x)		(S5P_VA_SROMC + (x))
++#define S5P_SROM_BW		S5P_SROMREG(0x0)
++#define S5P_SROM_BC0		S5P_SROMREG(0x4)
++#define S5P_SROM_BC1		S5P_SROMREG(0x8)
++#define S5P_SROM_BC2		S5P_SROMREG(0xc)
++#define S5P_SROM_BC3		S5P_SROMREG(0x10)
++#define S5P_SROM_BC4		S5P_SROMREG(0x14)
++#define S5P_SROM_BC5		S5P_SROMREG(0x18)
+ 
+ #define S5P_VA_COREPERI_BASE	S3C_ADDR(0x02800000)
+ #define S5P_VA_COREPERI(x)	(S5P_VA_COREPERI_BASE + (x))
+diff --git a/drivers/net/ethernet/davicom/dm9000.c b/drivers/net/ethernet/davicom/dm9000.c
+old mode 100644
+new mode 100755
+index f45385f..85be2524
+--- a/drivers/net/ethernet/davicom/dm9000.c
++++ b/drivers/net/ethernet/davicom/dm9000.c
+@@ -18,7 +18,7 @@
+  *	Ben Dooks <ben@simtec.co.uk>
+  *	Sascha Hauer <s.hauer@pengutronix.de>
+  */
+-
++#define DEBUG
+ #include <linux/module.h>
+ #include <linux/ioport.h>
+ #include <linux/netdevice.h>
+@@ -63,7 +63,7 @@ MODULE_PARM_DESC(watchdog, "transmit timeout in milliseconds");
+ /*
+  * Debug messages level
+  */
+-static int debug;
++static int debug = 3;
+ module_param(debug, int, 0644);
+ MODULE_PARM_DESC(debug, "dm9000 debug level (0-4)");
+ 
+@@ -1029,6 +1029,10 @@ dm9000_start_xmit(struct sk_buff *skb, struct net_device *dev)
+ 
+ 	dm9000_dbg(db, 3, "%s:\n", __func__);
+ 
++	{
++        pr_debug("TX: - packet len:%d\n", skb->len);
++	    print_hex_dump_bytes("pk data: ", DUMP_PREFIX_OFFSET, skb->data, skb->len);
++    }
+ 	if (db->tx_pkt_cnt > 1)
+ 		return NETDEV_TX_BUSY;
+ 
+@@ -1184,6 +1188,11 @@ dm9000_rx(struct net_device *dev)
+ 				else
+ 					skb_checksum_none_assert(skb);
+ 			}
++            {
++                pr_debug("RX: - packet len:%d\n", skb->len);
++                print_hex_dump_bytes("pk data: ", DUMP_PREFIX_OFFSET, skb->data, skb->len);
++            }
++            
+ 			netif_rx(skb);
+ 			dev->stats.rx_packets++;
+ 
+@@ -1397,6 +1406,8 @@ static struct dm9000_plat_data *dm9000_parse_dt(struct device *dev)
+ 	struct device_node *np = dev->of_node;
+ 	const void *mac_addr;
+ 
++    printk("**%s\n", __func__);
++
+ 	if (!IS_ENABLED(CONFIG_OF) || !np)
+ 		return ERR_PTR(-ENXIO);
+ 
+@@ -1660,7 +1671,7 @@ dm9000_probe(struct platform_device *pdev)
+ 	ndev->watchdog_timeo	= msecs_to_jiffies(watchdog);
+ 	ndev->ethtool_ops	= &dm9000_ethtool_ops;
+ 
+-	db->msg_enable       = NETIF_MSG_LINK;
++	db->msg_enable       = NETIF_MSG_LINK | NETIF_MSG_INTR | NETIF_MSG_RX_ERR | NETIF_MSG_TX_ERR | NETIF_MSG_TX_DONE | NETIF_MSG_RX_STATUS;
+ 	db->mii.phy_id_mask  = 0x1f;
+ 	db->mii.reg_num_mask = 0x1f;
+ 	db->mii.force_media  = 0;
+diff --git a/init/do_mounts.c b/init/do_mounts.c
+old mode 100644
+new mode 100755
+index dea5de9..80fdbd1
+--- a/init/do_mounts.c
++++ b/init/do_mounts.c
+@@ -214,6 +214,8 @@ dev_t name_to_dev_t(const char *name)
+ 	dev_t res = 0;
+ 	int part;
+ 
++    printk("**%s %s\n", __func__, name);
++
+ #ifdef CONFIG_BLOCK
+ 	if (strncmp(name, "PARTUUID=", 9) == 0) {
+ 		name += 9;
+@@ -511,6 +513,7 @@ void __init change_floppy(char *fmt, ...)
+ 
+ void __init mount_root(void)
+ {
++    printk("**%s ROOT_DEV=%x\n", __func__, ROOT_DEV);
+ #ifdef CONFIG_ROOT_NFS
+ 	if (ROOT_DEV == Root_NFS) {
+ 		if (mount_nfs_root())
+@@ -550,6 +553,8 @@ void __init prepare_namespace(void)
+ {
+ 	int is_floppy;
+ 
++    printk("**%s %s\n", __func__, saved_root_name);
++
+ 	if (root_delay) {
+ 		printk(KERN_INFO "Waiting %d sec before mounting root device...\n",
+ 		       root_delay);
+diff --git a/init/do_mounts_rd.c b/init/do_mounts_rd.c
+old mode 100644
+new mode 100755
+index dd4104c..4823953f
+--- a/init/do_mounts_rd.c
++++ b/init/do_mounts_rd.c
+@@ -195,6 +195,8 @@ int __init rd_load_image(char *from)
+ 	char rotator[4] = { '|' , '/' , '-' , '\\' };
+ #endif
+ 
++    printk("**%s %s\n", __func__, from);
++
+ 	out_fd = sys_open("/dev/ram", O_RDWR, 0);
+ 	if (out_fd < 0)
+ 		goto out;
+diff --git a/init/initramfs.c b/init/initramfs.c
+old mode 100644
+new mode 100755
+index b32ad7d..f3e2c96
+--- a/init/initramfs.c
++++ b/init/initramfs.c
+@@ -7,7 +7,7 @@
+ #undef __CHECKER__
+ #warning "Sparse checking disabled for this file"
+ #endif
+-
++#define DEBUG
+ #include <linux/init.h>
+ #include <linux/fs.h>
+ #include <linux/slab.h>
+@@ -111,6 +111,8 @@ static long __init do_utime(char *filename, time_t mtime)
+ {
+ 	struct timespec t[2];
+ 
++    printk("**%s-%s\n", __func__, filename);
++
+ 	t[0].tv_sec = mtime;
+ 	t[0].tv_nsec = 0;
+ 	t[1].tv_sec = mtime;
+@@ -453,6 +455,8 @@ static char * __init unpack_to_rootfs(char *buf, unsigned long len)
+ 	const char *compress_name;
+ 	static __initdata char msg_buf[64];
+ 
++    printk("**%s\n", __func__);
++
+ 	header_buf = kmalloc(110, GFP_KERNEL);
+ 	symlink_buf = kmalloc(PATH_MAX + N_ALIGN(PATH_MAX) + 1, GFP_KERNEL);
+ 	name_buf = kmalloc(N_ALIGN(PATH_MAX), GFP_KERNEL);
+@@ -608,6 +612,10 @@ static void __init clean_rootfs(void)
+ static int __init populate_rootfs(void)
+ {
+ 	char *err = unpack_to_rootfs(__initramfs_start, __initramfs_size);
++
++    printk("**%s %x-%x initrd_start=%x-%x\n", 
++        __func__, __initramfs_start, __initramfs_size, initrd_start, initrd_end);
++
+ 	if (err)
+ 		panic("%s", err); /* Failed to decompress INTERNAL initramfs */
+ 	if (initrd_start) {
+diff --git a/init/main.c b/init/main.c
+old mode 100644
+new mode 100755
+index 2858be7..d31b6b8
+--- a/init/main.c
++++ b/init/main.c
+@@ -892,6 +892,7 @@ void __init load_default_modules(void)
+ 
+ static int run_init_process(const char *init_filename)
+ {
++    printk("**%s %s\n", __func__, init_filename);
+ 	argv_init[0] = init_filename;
+ 	return do_execve(getname_kernel(init_filename),
+ 		(const char __user *const __user *)argv_init,
+@@ -952,6 +953,8 @@ static int __ref kernel_init(void *unused)
+ 
+ 	rcu_end_inkernel_boot();
+ 
++    printk("**%s rdinit=%s init=%s\n", __func__, ramdisk_execute_command, execute_command);
++
+ 	if (ramdisk_execute_command) {
+ 		ret = run_init_process(ramdisk_execute_command);
+ 		if (!ret)
+@@ -1026,9 +1029,12 @@ static noinline void __init kernel_init_freeable(void)
+ 	 * check if there is an early userspace init.  If yes, let it do all
+ 	 * the work
+ 	 */
++    printk("**%s rdinit=%s\n", __func__, ramdisk_execute_command);
+ 
+-	if (!ramdisk_execute_command)
++    if (!ramdisk_execute_command)
+ 		ramdisk_execute_command = "/init";
++    
++    printk("***%s rdinit=%s\n", __func__, ramdisk_execute_command);
+ 
+ 	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
+ 		ramdisk_execute_command = NULL;

@@ -1,1 +1,1 @@
-# S5PV210
+Kernel config ant patch files for S5PV210
